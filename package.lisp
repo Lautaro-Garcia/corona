@@ -1,0 +1,2 @@
+(defpackage :corona
+  (:use :cl))
