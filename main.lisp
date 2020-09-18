@@ -4,10 +4,12 @@
 
 (defparameter *meses* '("JAN" "FEB" "MAR" "APR" "MAY" "JUN" "JUL" "AUG" "SEP" "OCT" "NOV" "DEC"))
 
-(defun fecha-sin-hora (fecha-mal-formateada)
+(define-condition fecha-mal-formateada (error) ())
+
+(defun fecha-sin-hora (fecha-con-hora)
   "Le quita la hora al formato de fecha que están usando en el csv
    Fecha (con hora) de ejemplo: 06SEP2020:00:00:00"
-  (first (uiop:split-string fecha-mal-formateada :separator "::")))
+  (first (uiop:split-string fecha-con-hora :separator "::")))
 
 (defun indicador (casos-diarios)
   (format nil "[~a] ~4d" (first casos-diarios) (round (second casos-diarios))))
@@ -18,11 +20,17 @@
   (let* ((dia (subseq fecha 0 2))
          (mes (subseq fecha 2 5))
          (anio (subseq fecha 5)))
-    (date-time-parser:parse-date-time (format nil "~a-~2,'0d-~a" anio (1+ (position mes *meses* :test #'string=)) dia))))
+    (let ((indice-mes (position mes *meses* :test #'string=)))
+      (unless indice-mes (error 'fecha-mal-formateada))
+      (date-time-parser:parse-date-time (format nil "~a-~2,'0d-~a" anio (1+ indice-mes) dia)))))
+
+(defun caso-para-fecha (casos fecha)
+  (handler-case (list (a-timestamp fecha) fecha (gethash fecha casos))
+    (fecha-mal-formateada () (progn (format t "Fecha mal formateada: ~a~%" fecha) nil))))
 
 (defun a-lista-de-casos (casos)
   (loop :for (timestamp fecha cantidad-casos)
-        :in (sort (loop :for fecha :being :the :hash-key :of casos :collecting (list (a-timestamp fecha) fecha (gethash fecha casos))) #'< :key #'first)
+        :in (sort (loop :for fecha :being :the :hash-key :of casos :for caso := (caso-para-fecha casos fecha) :when caso :collect :it) #'< :key #'first)
         :collecting (list fecha cantidad-casos)))
 
 (defun parsear-casos (archivo-casos)
@@ -36,7 +44,7 @@
           (setf (gethash fecha casos) (+ cantidad-casos (gethash fecha casos 0))))))
     casos))
 
-(defun main ()
+(defun descargar-y-mostrar-grafico ()
   (uiop:with-temporary-file (:pathname csv-casos :suffix ".covid19.csv")
     (trivial-download:download *url-csv-casos* csv-casos :quiet t)
     (let ((lista-casos (a-lista-de-casos (parsear-casos csv-casos))))
@@ -44,3 +52,9 @@
                                              :min 0
                                              :title "Casos de COVID para residentes de CABA"
                                              :labels (mapcar #'indicador lista-casos))))))
+
+(defun main ()
+  (handler-case (descargar-y-mostrar-grafico)
+    (trivial-download:http-error () (print "No se pudo descargar desde el servidor del GCBA"))
+    (usocket:ns-try-again-condition () (print "No hay conexión a internet"))
+    (sb-sys:interactive-interrupt () (sb-posix:exit 0))))
